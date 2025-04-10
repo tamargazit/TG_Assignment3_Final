@@ -1,0 +1,264 @@
+---
+title: "Assignment 3: Linear Mixed Effects Models"
+author: "Tamar Gazit (B00842040)"
+format: html
+editor: visual
+---
+
+## Data Preparation
+
+```{r}
+# -------------------------------------------
+# 1. Load packages
+# -------------------------------------------
+library(haven)         # For loading SPSS
+library(tidyverse)     # For data wrangling and plotting
+library(flexplot)      # For visualizations and diagnostics
+library(lme4)          # For mixed-effects models
+library(performance)   # For ICC, R2
+library(apaTables)     # For APA-style correlation table
+library(psych)         # For descriptive statistics
+library(broom.mixed)   # For extracting model summaries
+
+# -------------------------------------------
+# 2. Load & prepare data
+# -------------------------------------------
+data <- read_sav("P6003.A4.sav") %>%
+  mutate(
+    id = as.factor(id),      # Converts participant ID into a factor (categorical), which is necessary for modeling random effects
+    day = as.numeric(day))   # Ensures 'day' is treated as a numeric variable (e.g., for potential time effects or ordering)
+
+# Rationale:
+# - This section prepares the dataset for analysis by ensuring variables have the correct data types.
+# - Treating 'id' as a factor is essential for nesting repeated observations in mixed-effects models.
+# - Ensuring 'day' is numeric would be necessary if modeling time effects or examining trends over days.
+```
+
+## Data Exploration
+
+```{r}
+# -------------------------------------------
+# 3. Descriptives and correlations
+# -------------------------------------------
+
+vars <- data %>% select(swl, tipm.E, tipm.N)  
+# Selects the three key variables:
+# swl = Satisfaction With Life (outcome variable)
+# tipm.E = Extraversion (predictor for H1)
+# tipm.N = Neuroticism (predictor for H2)
+
+names(vars) <- c("Satisfaction with Life", "Extraversion", "Neuroticism")  
+# Renames variables to improve readability in tables and output
+
+describe(vars)  
+# Provides descriptive statistics for each variable (mean, SD, skew, kurtosis, etc.)
+# Useful for checking distribution shape and identifying possible outliers or violations of normality
+
+apa.cor.table(vars, filename = "Table1_APA_Descriptives.doc")  
+# Generates an APA-style correlation table between all three variables
+# Automatically saves the table as a .doc file for reporting
+# Helps provide preliminary support for H1 and H2
+
+# -------------------------------------------
+# 4. Univariate & bivariate visualizations
+# -------------------------------------------
+
+# Univariate plots: visualize distributions of each variable
+flexplot(swl ~ 1, data = data) +             # Histogram of SWL
+  flexplot(tipm.E ~ 1, data = data) /        # Histogram of Extraversion
+  flexplot(tipm.N ~ 1, data = data)          # Histogram of Neuroticism
+
+# Purpose:
+# - Identify skewness, outliers, or floor/ceiling effects
+# - Determine if transformations or data cleaning might be needed
+
+# Bivariate plots: examine linear relationships between predictors and outcome
+flexplot(swl ~ tipm.E, data = data) +        # Tests H1 visually: is Extraversion positively related to SWL?
+  flexplot(swl ~ tipm.N, data = data)        # Tests H2 visually: is Neuroticism negatively related to SWL?
+
+# Purpose:
+# - Evaluate linearity of the relationships
+# - Spot clusters, influential points, or non-linear patterns
+
+# -------------------------------------------
+# 5. Fit null model & compute ICC
+# -------------------------------------------
+
+model_null <- lmer(swl ~ 1 + (1 | id), data = data)  
+# Fits a null (intercept-only) mixed-effects model with random intercepts for participants
+# This model assumes that each participant has their own baseline level of SWL
+# No predictors are included yet
+
+flexplot::icc(model_null)  
+# Calculates the Intra-Class Correlation (ICC) and Design Effect
+# ICC = proportion of variance in SWL explained by differences between participants
+# Design Effect > 2 suggests multilevel modeling is preferred due to clustering
+# Supports justification for mixed-effects modeling
+
+# -------------------------------------------
+# 6. Assumption check model (random intercepts only)
+# -------------------------------------------
+
+model_check <- lmer(swl ~ tipm.E + tipm.N + (1 | id), data = data)  
+# Fits a model with both predictors (Extraversion and Neuroticism) as fixed effects
+# Includes random intercepts for participant ID
+# Used for checking model assumptions before fitting more complex models
+
+# Residual diagnostics
+resid_data <- model.frame(model_check) %>%
+  mutate(
+    resid = residuals(model_check),   # Adds residuals to the model data
+    fitted = fitted(model_check)      # Adds fitted (predicted) values to the model data
+  )
+
+# Residuals vs. predictors: check for linearity and homoscedasticity
+flexplot(resid ~ tipm.E, data = resid_data)  # Should look like random scatter
+flexplot(resid ~ tipm.N, data = resid_data)  # No pattern = good fit
+flexplot(resid ~ 1, data = resid_data)       # Histogram of residuals to assess normality
+
+# Q-Q plot: check normality of residuals
+qqnorm(resid_data$resid); qqline(resid_data$resid, col = "red")  
+# Points should fall approximately along the red line if residuals are normally distributed
+
+# Residuals vs. fitted values: final check for linearity and equal variance
+ggplot(resid_data, aes(fitted, resid)) +
+  geom_point(alpha = 0.3) +                  # Scatterplot of residuals
+  geom_smooth(method = "loess") +            # LOESS curve to detect non-linearity
+  labs(title = "Residuals vs Fitted", x = "Fitted Values", y = "Residuals") +
+  theme_minimal()
+
+# Purpose:
+# - Confirm that the model meets assumptions of linearity, homoscedasticity, and normality
+# - If these assumptions are violated, transformations or alternative models might be needed
+
+```
+
+## Model Building
+
+```{r}
+# -------------------------------------------
+# 7. Model Building and Comparison
+# -------------------------------------------
+
+# Step 1: Fixed slope for Extraversion
+model_fixed_E <- lmer(swl ~ tipm.E + (1 | id), data = data)
+summary(model_fixed_E)
+# Tests H1: Is Extraversion positively associated with SWL?
+# This model includes Extraversion as a fixed effect and a random intercept for participant ID.
+
+# Step 2: Random slope for Extraversion
+model_random_E <- lmer(swl ~ tipm.E + (tipm.E | id), data = data)
+summary(model_random_E)
+# This model allows the slope of Extraversion to vary across participants.
+# Tests whether the Extraversion–SWL relationship differs between individuals.
+
+# Step 3: Add fixed Neuroticism
+model_fixed_E_N <- lmer(swl ~ tipm.E + tipm.N + (tipm.E | id), data = data)
+summary(model_fixed_E_N)
+# Tests H2: Is Neuroticism negatively associated with SWL?
+# This model adds Neuroticism as a fixed effect, retaining random slopes for Extraversion.
+
+# Step 4: Random slopes for both Extraversion and Neuroticism
+model_random_E_N <- lmer(swl ~ tipm.E + tipm.N + (tipm.E + tipm.N | id), data = data)
+summary(model_random_E_N)
+# This model tests H3 using random slope variance.
+# If slope variances are small and not significant, this suggests consistent effects across individuals.
+
+# -------------------------------------------
+# Step 5: Disaggregated predictors to test H3 (within-person vs. between-person effects)
+# -------------------------------------------
+
+# The goal of this step is to test Hypothesis 3 (H3): whether the effects of extraversion and neuroticism on life satisfaction are similar at the within-person level (Level 1) and between-person level (Level 2).
+# This is done by "disaggregating" the predictors into their within- and between-person components.
+
+data <- data %>%
+  group_by(id) %>%
+  mutate(
+    # Compute the person-level mean (Level 2) for extraversion and neuroticism.
+    # These represent the stable, average trait levels of each participant across all measurement occasions.
+    extraversion_mean = mean(tipm.E, na.rm = TRUE),
+    neuroticism_mean = mean(tipm.N, na.rm = TRUE),
+
+    # Compute within-person deviations by subtracting each person’s mean from their daily score.
+    # These person-centered variables (Level 1) represent daily fluctuations around each person's trait average.
+    extraversion_wp = tipm.E - extraversion_mean,  # Within-person component of Extraversion
+    neuroticism_wp = tipm.N - neuroticism_mean     # Within-person component of Neuroticism
+  ) %>%
+  ungroup()  # Remove grouping to return to the full dataset structure
+
+# -------------------------------------------
+# Model: Predict life satisfaction using both within- and between-person components
+# -------------------------------------------
+
+model_wp_bp <- lmer(
+  swl ~ extraversion_wp + extraversion_mean +      # Extraversion at both levels
+        neuroticism_wp + neuroticism_mean +        # Neuroticism at both levels
+        (1 | id),                                  # Random intercept for participant
+  data = data
+)
+
+# Examine the model output
+summary(model_wp_bp)
+
+tidy(model_wp_bp, effects = "fixed", conf.int = TRUE)
+# Fixed effects with standard errors and confidence intervals
+
+icc(model_wp_bp)
+# Intra-class correlation
+
+r2(model_wp_bp)
+# Marginal and conditional R^2 values
+# Marginal = variance explained by fixed effects
+# Conditional = total variance explained by fixed and random effects
+
+# -------------------------------------------
+# Interpretation:
+# This multilevel model directly tests H3 by separating:
+# - Within-person effects: Do daily fluctuations in extraversion/neuroticism predict SWL?
+# - Between-person effects: Do people with higher average Extraversion/lower average Neuroticism report greater SWL overall?
+# 
+# If the coefficients for within- and between-person predictors are similar in size and direction,that supports H3 (i.e., the effects are consistent across levels).
+# If they differ meaningfully, H3 is only partially supported.
+
+# -------------------------------------------
+# Model Comparisons to Justify Complexity
+# -------------------------------------------
+
+model.comparison(model_fixed_E, model_random_E)
+# Tests whether allowing Extraversion slopes to vary improves model fit (H1).
+
+model.comparison(model_random_E, model_fixed_E_N)
+# Tests whether adding Neuroticism improves the model beyond Extraversion (H2).
+
+model.comparison(model_fixed_E_N, model_random_E_N)
+# Tests whether allowing both slopes to vary improves model fit (random slopes for H3).
+# This has the best fit!!
+
+model.comparison(model_random_E_N, model_wp_bp)
+# Tests whether disaggregating within- and between-person effects improves model fit beyond allowing random slopes (directly addresses H3).
+
+
+# -------------------------------------------
+# 8. Final Model Output and Interpretation
+# -------------------------------------------
+
+# Visualizations for final model
+visualize(model_random_E_N, plot = "model")
+# Observed vs. predicted SWL values
+
+visualize(model_random_E_N, plot = "residuals")
+# Residual plot to check assumptions
+
+tidy(model_random_E_N, effects = "fixed", conf.int = TRUE)
+# Fixed effects with standard errors and confidence intervals
+
+icc(model_random_E_N)
+# Intra-class correlation: proportion of variance due to between-person differences
+
+r2(model_random_E_N)
+# Marginal and conditional R^2 values
+# Marginal = variance explained by fixed effects
+# Conditional = total variance explained by fixed and random effects
+```
+
+### 
